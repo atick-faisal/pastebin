@@ -2,6 +2,7 @@
 package httpserver
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 
 	"pastebin/internal/textstate"
 )
+
+//go:embed web/index.html web/app.js
+var assets embed.FS
 
 // Server owns one shared text state. Construct it with New.
 type Server struct {
@@ -35,6 +39,18 @@ func New() *Server {
 	}
 	s.mux.HandleFunc("POST /text", s.replace)
 	s.mux.HandleFunc("GET /events", s.events)
+	for path, asset := range map[string]string{"/{$}": "web/index.html", "/app.js": "web/app.js"} {
+		s.mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			if asset == "web/index.html" {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			} else {
+				w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+			}
+			data, _ := assets.ReadFile(asset)
+			w.Write(data)
+		})
+	}
 	return s
 }
 
