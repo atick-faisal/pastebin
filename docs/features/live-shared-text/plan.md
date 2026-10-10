@@ -1,7 +1,7 @@
 ---
 slug: live-shared-text
 title: Live Shared Text
-status: in-progress
+status: shipped
 created: 2026-10-10
 ---
 
