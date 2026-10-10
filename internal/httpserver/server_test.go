@@ -401,6 +401,27 @@ func TestRoutingAndBodyReadFailure(t *testing.T) {
 	}
 }
 
+func TestEmbeddedBrowserAssets(t *testing.T) {
+	handler := New()
+	for _, tt := range []struct {
+		path        string
+		contentType string
+		contains    string
+	}{
+		{"/", "text/html; charset=utf-8", `<script src="/app.js" defer></script>`},
+		{"/app.js", "text/javascript; charset=utf-8", `new EventSource("/events")`},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tt.path, nil))
+		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != tt.contentType {
+			t.Fatalf("GET %s: status %d, headers %v", tt.path, response.Code, response.Header())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Body.String(), tt.contains) {
+			t.Fatalf("GET %s: missing cache policy or asset content", tt.path)
+		}
+	}
+}
+
 type failingReader struct{}
 
 func (failingReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
