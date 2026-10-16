@@ -20,7 +20,7 @@ var assets embed.FS
 // Server owns one shared text state. Construct it with New.
 type Server struct {
 	mu           sync.Mutex
-	state        textstate.State
+	state        *textstate.State
 	current      []byte
 	subscribers  map[chan []byte]struct{}
 	mux          *http.ServeMux
@@ -30,8 +30,10 @@ type Server struct {
 
 // New returns an empty server at revision zero.
 func New() *Server {
+	state := textstate.New()
 	s := &Server{
-		current:      encodeSnapshot(textstate.Snapshot{}),
+		state:        state,
+		current:      encodeSnapshot(state.Current()),
 		subscribers:  make(map[chan []byte]struct{}),
 		mux:          http.NewServeMux(),
 		writeTimeout: 5 * time.Second,
@@ -58,13 +60,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
+// encodeSnapshot sends only the first box: the single-text protocol cannot add
+// or remove boxes, so the first box is the only one that exists.
 func encodeSnapshot(snapshot textstate.Snapshot) []byte {
 	// This concrete string/integer payload cannot fail JSON encoding. Encoding
 	// once per revision lets all subscribers share immutable snapshot bytes.
 	data, _ := json.Marshal(struct {
 		Text     string `json:"text"`
 		Revision uint64 `json:"revision"`
-	}{snapshot.Text, snapshot.Revision})
+	}{snapshot.Boxes[0].Text, snapshot.Revision})
 	return data
 }
 
@@ -73,7 +77,7 @@ func encodeSnapshot(snapshot textstate.Snapshot) []byte {
 func (s *Server) accept(text string) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	snapshot, err := s.state.Replace(text)
+	snapshot, err := s.state.Write(s.state.Current().Boxes[0].ID, text)
 	if err != nil {
 		return nil, err
 	}
