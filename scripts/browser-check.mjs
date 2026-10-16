@@ -137,6 +137,18 @@ try {
   const pasted = "Pasted text\n🙂 العربية\n</textarea><script>throw Error('unsafe')</script>";
   await paste(a, pasted);
   await Promise.all([saved(a, pasted), saved(b, pasted)]);
+  await b.bringToFront();
+  await b.locator("#copy").click();
+  await b.waitForFunction(() => document.getElementById("copy-status").textContent === "Copied.");
+  assert.equal(await b.evaluate(() => navigator.clipboard.readText()), pasted);
+  await a.evaluate(() => {
+    window.nativeWriteText = navigator.clipboard.writeText;
+    navigator.clipboard.writeText = () => Promise.reject(new DOMException("denied", "NotAllowedError"));
+  });
+  await a.locator("#copy").click();
+  await a.waitForFunction(() => document.getElementById("copy-status").textContent.includes("Could not copy"));
+  await a.evaluate(() => { navigator.clipboard.writeText = window.nativeWriteText; });
+  console.log("PASS: copy button copies the complete synchronized text and reports clipboard failures");
   await paste(b, "Pasted from browser B\nمرحبا 🙂");
   await Promise.all([saved(a, "Pasted from browser B\nمرحبا 🙂"), saved(b, "Pasted from browser B\nمرحبا 🙂")]);
   await b.locator("#text").fill("Edited from browser B");
