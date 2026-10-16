@@ -1,7 +1,7 @@
 ---
 slug: docker-deploy
 title: Docker Deployment
-status: in-progress
+status: shipped
 created: 2026-10-16
 ---
 
