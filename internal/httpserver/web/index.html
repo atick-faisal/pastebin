@@ -5,9 +5,76 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pastebin</title>
   <style>
-    body { margin: 1rem; font-family: system-ui, sans-serif; }
-    .box { margin-bottom: 1.5rem; }
-    textarea { box-sizing: border-box; width: 100%; height: 40vh; font: 1rem monospace; }
+    /* One Dark palette: https://github.com/atom/one-dark-syntax */
+    :root {
+      color-scheme: dark;
+      --bg: #282c34;
+      --bg-dark: #21252b;
+      --fg: #abb2bf;
+      --fg-bright: #d7dae0;
+      --muted: #5c6370;
+      --border: #3e4451;
+      --accent: #61afef;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0 auto;
+      padding: 1rem;
+      max-width: 100ch;
+      background: var(--bg);
+      color: var(--fg);
+      font: 0.875rem/1.5 ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    }
+    h1 { margin: 0 0 0.5rem; font-size: 1rem; color: var(--accent); }
+    p { margin: 0.25rem 0; }
+    /* Status text is often empty; collapse it so it leaves no gap. */
+    p:empty, span:empty { display: none; }
+    #status, .status, .copy-status, #add-status { color: var(--muted); }
+    #boxes { margin: 1rem 0; }
+    .box {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.25rem 0.5rem;
+      margin-bottom: 1rem;
+      padding: 0.5rem;
+      border: 1px solid var(--border);
+      background: var(--bg-dark);
+    }
+    .box:focus-within { border-color: var(--accent); }
+    label { flex: 1 1 auto; color: var(--fg-bright); font-weight: bold; }
+    .box .status { flex-basis: 100%; }
+    button {
+      padding: 0.125rem 0.75rem;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--fg);
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    /* Dashed and dimmed, so it cannot be mistaken for the solid focus outline. */
+    button:disabled, textarea:disabled {
+      border-style: dashed;
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    textarea {
+      flex-basis: 100%;
+      height: 40vh;
+      padding: 0.5rem;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--fg-bright);
+      caret-color: var(--accent);
+      font: inherit;
+      resize: vertical;
+    }
+    /* Keep the font at 16px on phones so iOS Safari does not zoom in on focus. */
+    @media (max-width: 40rem) {
+      textarea { font-size: 1rem; }
+    }
   </style>
   <script src="/app.js" defer></script>
 </head>
