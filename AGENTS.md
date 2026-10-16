@@ -16,11 +16,11 @@ Run `just` with no arguments to see every recipe. The ones you will need most:
 | `just verify` | Full verification. The entrypoint. |
 | `just vet` | Check Go packages for suspicious code. |
 | `just test` | Run tests with data race detection. |
+| `just browser-check` | Drive two browsers against a local server. Run it after browser changes. |
 
-## Things that will trip you up
-
-- The repository starts without a Go module or CI. Verification is a proposed
-  baseline and cannot pass until the Go module exists.
+`just browser-check` needs Node and Playwright, so it is not part of
+`just verify`. Set `PASTEBIN_PLAYWRIGHT_MODULE` to use an existing Playwright
+install.
 
 ## Planning
 
