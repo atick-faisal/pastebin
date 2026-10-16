@@ -1,113 +1,268 @@
 "use strict";
 
-const text = document.getElementById("text");
+// Mirrors textstate.MaxBoxes on the server.
+const MAX_BOXES = 10;
+const LIMIT_MESSAGE = `Box limit of ${MAX_BOXES} reached. Remove a box to add another.`;
+const REMOVED_MESSAGE = "A box you were editing was removed by someone else. Its unsaved text was lost.";
+
 const status = document.getElementById("status");
-const copy = document.getElementById("copy");
-const copyStatus = document.getElementById("copy-status");
+const notice = document.getElementById("notice");
+const container = document.getElementById("boxes");
+const add = document.getElementById("add");
+const addStatus = document.getElementById("add-status");
+const template = document.getElementById("box-template");
 const events = new EventSource("/events");
 let generation = 0;
-let latest = null;
-let writing = null;
-let pending = false;
-let failure = "";
+let connected = false;
+// Box IDs in server order, keyed to their elements, server text and write queue.
+let boxes = new Map();
+// IDs this browser dropped after a 404. IDs are never reused within a server
+// process, so an older box list arriving later must not bring one back.
+let gone = new Set();
+// -1 means nothing is known yet, so even a revision-zero snapshot applies.
+let listRevision = -1;
+let noticeTimer;
 
-function remember(snapshot) {
-  // POST replies and SSE echoes can arrive in either order.
-  if (latest === null || snapshot.revision > latest.revision) {
-    latest = snapshot;
-  }
+function showNotice(message) {
+  notice.textContent = message;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { notice.textContent = ""; }, 5000);
 }
 
-function render() {
+// live reports whether a request's box still belongs to the current connection.
+function live(box, requestGeneration) {
+  return requestGeneration === generation && boxes.get(box.id) === box;
+}
+
+function render(box) {
   // Keep typing and rejected drafts visible. Assigning value does not fire input,
   // and skipping equal values also preserves the caret on a sender's echo.
-  if (!writing && !pending && !failure && text.value !== latest.text) {
-    text.value = latest.text;
+  if (!box.writing && !box.pending && !box.failure && box.textarea.value !== box.text) {
+    box.textarea.value = box.text;
   }
-  status.textContent = failure || (writing || pending ? "Saving…" : "Connected. Changes saved.");
+  box.status.textContent = box.failure || (box.writing || box.pending ? "Saving…" : "Saved.");
 }
 
-async function submit() {
-  if (latest === null || writing || !pending) return;
-  const currentGeneration = generation;
+function renderControls() {
+  const full = boxes.size >= MAX_BOXES;
+  add.disabled = !connected || full;
+  addStatus.textContent = full ? LIMIT_MESSAGE : "";
+  for (const box of boxes.values()) {
+    box.textarea.disabled = !connected;
+    // There is always at least one box (Q2).
+    box.remove.disabled = !connected || boxes.size === 1 || box.removing;
+  }
+}
+
+function createBox(id) {
+  const section = template.content.firstElementChild.cloneNode(true);
+  const box = {
+    id,
+    section,
+    textarea: section.querySelector("textarea"),
+    status: section.querySelector(".status"),
+    copyStatus: section.querySelector(".copy-status"),
+    remove: section.querySelector(".remove"),
+    text: "",
+    revision: -1,
+    writing: null,
+    pending: false,
+    failure: "",
+    removing: false,
+  };
+  section.dataset.id = id;
+  box.textarea.id = `box-${id}`;
+  section.querySelector("label").htmlFor = box.textarea.id;
+  section.querySelector("label").textContent = `Box ${id}`;
+  section.querySelector(".copy").setAttribute("aria-label", `Copy box ${id}`);
+  box.remove.setAttribute("aria-label", `Remove box ${id}`);
+
+  box.textarea.addEventListener("input", () => {
+    // A single flag coalesces intermediate input into the latest visible draft.
+    box.pending = true;
+    submit(box);
+  });
+  section.querySelector(".copy").addEventListener("click", async () => {
+    try {
+      // navigator.clipboard is undefined outside secure contexts (plain HTTP on a LAN),
+      // so that case throws here too and shares the failure message.
+      await navigator.clipboard.writeText(box.textarea.value);
+      box.copyStatus.textContent = "Copied.";
+    } catch {
+      box.copyStatus.textContent = "Could not copy. Select the text and copy it manually.";
+    }
+  });
+  box.remove.addEventListener("click", () => removeBox(box));
+  return box;
+}
+
+function drop(box) {
+  // Someone else's removal wins, so an unsaved draft in that box is lost (Q4).
+  if (!box.removing && (box.writing || box.pending || box.failure)) {
+    showNotice(REMOVED_MESSAGE);
+  }
+  if (box.writing) box.writing.abort();
+  boxes.delete(box.id);
+  box.section.remove();
+}
+
+function applyList(ids, revision) {
+  // Replies and SSE events can arrive in either order; a list is the whole order.
+  if (revision <= listRevision) return;
+  listRevision = revision;
+  const kept = new Set(ids);
+  for (const box of boxes.values()) {
+    if (!kept.has(box.id)) drop(box);
+  }
+  // The server only appends boxes (Q1), so new ones always belong at the end.
+  for (const id of ids) {
+    if (boxes.has(id) || gone.has(id)) continue;
+    const box = createBox(id);
+    boxes.set(id, box);
+    container.append(box.section);
+    render(box);
+  }
+  renderControls();
+}
+
+function applyText(id, text, revision) {
+  const box = boxes.get(id);
+  if (!box || revision <= box.revision) return;
+  box.text = text;
+  box.revision = revision;
+  render(box);
+}
+
+function applySnapshot(snapshot) {
+  if (!connected) {
+    // The first snapshot of a connection is a new baseline, even at revision
+    // zero after a server restart, so nothing from before it is kept.
+    connected = true;
+    for (const box of boxes.values()) box.section.remove();
+    boxes = new Map();
+    gone = new Set();
+    listRevision = -1;
+    status.textContent = "Connected.";
+  }
+  applyList(snapshot.boxes.map((box) => box.id), snapshot.revision);
+  for (const box of snapshot.boxes) applyText(box.id, box.text, snapshot.revision);
+}
+
+async function submit(box) {
+  if (!connected || box.writing || !box.pending) return;
+  const requestGeneration = generation;
   const controller = new AbortController();
-  writing = controller;
-  pending = false;
-  failure = "";
-  const draft = text.value;
-  render();
+  box.writing = controller;
+  box.pending = false;
+  box.failure = "";
+  const draft = box.textarea.value;
+  render(box);
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch("/text", {
-      method: "POST",
+    const response = await fetch(`/boxes/${box.id}`, {
+      method: "PUT",
       headers: { "Content-Type": "text/plain; charset=utf-8" },
       body: draft,
       signal: controller.signal,
     });
+    if (!live(box, requestGeneration)) return;
+    if (response.status === 404) {
+      gone.add(box.id);
+      drop(box);
+      renderControls();
+      return;
+    }
     if (!response.ok) {
       throw new Error(response.status === 413
         ? "Text exceeds the 10 MiB limit. Your draft was not saved; shorten it to retry."
         : `Could not save (HTTP ${response.status}). Your draft is still here; edit it to retry.`);
     }
-    const snapshot = await response.json();
-    if (currentGeneration !== generation) return;
-    remember(snapshot);
+    const reply = await response.json();
+    if (!live(box, requestGeneration)) return;
+    applyText(reply.box.id, reply.box.text, reply.revision);
   } catch (error) {
-    if (currentGeneration !== generation) return;
-    failure = error instanceof TypeError || error.name === "AbortError"
+    if (!live(box, requestGeneration)) return;
+    box.failure = error instanceof TypeError || error.name === "AbortError"
       ? "Could not confirm the save. Your draft is still here; edit it to retry."
       : error.message;
   } finally {
     clearTimeout(timeout);
-    // An old connection's completion must not touch a new connection's draft.
-    if (currentGeneration === generation) {
-      writing = null;
-      if (pending) {
-        submit();
+    // An old connection's or a removed box's completion must not touch a live draft.
+    if (live(box, requestGeneration)) {
+      box.writing = null;
+      if (box.pending) {
+        submit(box);
       } else {
-        render();
+        render(box);
       }
     }
   }
 }
 
-text.addEventListener("input", () => {
-  if (latest === null) return;
-  // A single flag coalesces intermediate input into the latest visible draft.
-  pending = true;
-  submit();
-});
+// change sends an add or remove and applies the box list it replies with.
+// It returns the failed response, or null when the list was applied or the
+// connection changed while waiting.
+async function change(path, method) {
+  const requestGeneration = generation;
+  const response = await fetch(path, { method });
+  if (!response.ok) return response;
+  const reply = await response.json();
+  if (requestGeneration === generation) applyList(reply.ids, reply.revision);
+  return null;
+}
 
-copy.addEventListener("click", async () => {
+async function removeBox(box) {
+  const requestGeneration = generation;
+  box.removing = true;
+  renderControls();
   try {
-    // navigator.clipboard is undefined outside secure contexts (plain HTTP on a LAN),
-    // so that case throws here too and shares the failure message.
-    await navigator.clipboard.writeText(text.value);
-    copyStatus.textContent = "Copied.";
+    const failed = await change(`/boxes/${box.id}`, "DELETE");
+    if (!failed || !live(box, requestGeneration)) return;
+    if (failed.status === 404) {
+      // Someone else removed it first, which is the outcome this click wanted.
+      gone.add(box.id);
+      drop(box);
+      return;
+    }
+    showNotice(failed.status === 409
+      ? "The last box cannot be removed."
+      : `Could not remove the box (HTTP ${failed.status}).`);
   } catch {
-    copyStatus.textContent = "Could not copy. Select the text and copy it manually.";
+    if (live(box, requestGeneration)) showNotice("Could not confirm the removal. Try again.");
+  } finally {
+    if (live(box, requestGeneration)) box.removing = false;
+    renderControls();
+  }
+}
+
+add.addEventListener("click", async () => {
+  const requestGeneration = generation;
+  try {
+    const failed = await change("/boxes", "POST");
+    if (!failed || requestGeneration !== generation) return;
+    showNotice(failed.status === 409 ? LIMIT_MESSAGE : `Could not add a box (HTTP ${failed.status}).`);
+  } catch {
+    if (requestGeneration === generation) showNotice("Could not confirm the new box. Try again.");
   }
 });
 
 events.onmessage = (event) => {
-  const snapshot = JSON.parse(event.data);
-  if (latest === null) {
-    // The first snapshot establishes a new baseline, even at revision zero.
-    failure = "";
-    text.value = snapshot.text;
-    text.disabled = false;
+  const message = JSON.parse(event.data);
+  if (message.type === "snapshot") {
+    applySnapshot(message);
+  } else if (message.type === "boxes") {
+    applyList(message.ids, message.revision);
+  } else if (message.type === "text") {
+    applyText(message.box.id, message.box.text, message.revision);
   }
-  remember(snapshot);
-  render();
 };
 
 events.onerror = () => {
   generation++;
-  if (writing) writing.abort();
-  writing = null;
-  pending = false;
-  latest = null;
-  failure = "";
-  text.disabled = true;
+  connected = false;
+  for (const box of boxes.values()) {
+    if (box.writing) box.writing.abort();
+  }
+  renderControls();
   status.textContent = "Disconnected. Reconnecting… Unsent edits will be discarded when shared text reloads.";
 };
