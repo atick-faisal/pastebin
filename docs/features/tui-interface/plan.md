@@ -1,7 +1,7 @@
 ---
 slug: tui-interface
 title: TUI-style Interface
-status: in-progress
+status: shipped
 created: 2026-10-16
 ---
 
