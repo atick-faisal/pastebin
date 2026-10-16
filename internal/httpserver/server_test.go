@@ -48,21 +48,27 @@ func openStream(t *testing.T, client *http.Client, url string) (*http.Response, 
 	return response, bufio.NewReader(response.Body)
 }
 
-func readSnapshot(reader *bufio.Reader) (textstate.Snapshot, error) {
+// textSnapshot is the single-text wire format of POST /text and GET /events.
+type textSnapshot struct {
+	Text     string
+	Revision uint64
+}
+
+func readSnapshot(reader *bufio.Reader) (textSnapshot, error) {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			return textstate.Snapshot{}, err
+			return textSnapshot{}, err
 		}
 		if strings.HasPrefix(line, "data: ") {
-			var snapshot textstate.Snapshot
+			var snapshot textSnapshot
 			err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &snapshot)
 			return snapshot, err
 		}
 	}
 }
 
-func wantSnapshot(t *testing.T, reader *bufio.Reader, want textstate.Snapshot) {
+func wantSnapshot(t *testing.T, reader *bufio.Reader, want textSnapshot) {
 	t.Helper()
 	got, err := readSnapshot(reader)
 	if err != nil || got != want {
@@ -70,16 +76,16 @@ func wantSnapshot(t *testing.T, reader *bufio.Reader, want textstate.Snapshot) {
 	}
 }
 
-func postText(client *http.Client, url, text string) (textstate.Snapshot, error) {
+func postText(client *http.Client, url, text string) (textSnapshot, error) {
 	response, err := client.Post(url+"/text", "text/plain; charset=utf-8", strings.NewReader(text))
 	if err != nil {
-		return textstate.Snapshot{}, err
+		return textSnapshot{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return textstate.Snapshot{}, fmt.Errorf("POST status: %s", response.Status)
+		return textSnapshot{}, fmt.Errorf("POST status: %s", response.Status)
 	}
-	var snapshot textstate.Snapshot
+	var snapshot textSnapshot
 	err = json.NewDecoder(response.Body).Decode(&snapshot)
 	return snapshot, err
 }
@@ -93,12 +99,12 @@ func TestFiveSubscribersSenderDeliveryAndReconnect(t *testing.T) {
 		response, reader := openStream(t, client, server.URL)
 		responses = append(responses, response)
 		readers = append(readers, reader)
-		wantSnapshot(t, reader, textstate.Snapshot{})
+		wantSnapshot(t, reader, textSnapshot{})
 	}
 
 	for i, text := range []string{"first\nsecond\r\n🙂\"\\", "other browser", ""} {
 		// The sender's SSE connection uses this client too; it must get its echo.
-		want := textstate.Snapshot{Text: text, Revision: uint64(i + 1)}
+		want := textSnapshot{Text: text, Revision: uint64(i + 1)}
 		got, err := postText(client, server.URL, text)
 		if err != nil || got != want {
 			t.Fatalf("POST = %+v, %v; want %+v", got, err, want)
@@ -122,19 +128,19 @@ func TestFiveSubscribersSenderDeliveryAndReconnect(t *testing.T) {
 	// A restarted process has a new revision baseline.
 	fresh, freshClient := testServer(t, New())
 	_, restarted := openStream(t, freshClient, fresh.URL)
-	wantSnapshot(t, restarted, textstate.Snapshot{})
+	wantSnapshot(t, restarted, textSnapshot{})
 }
 
 func TestConcurrentPostsPublishInRevisionOrder(t *testing.T) {
 	handler := New()
 	server, client := testServer(t, handler)
 	_, reader := openStream(t, client, server.URL)
-	wantSnapshot(t, reader, textstate.Snapshot{})
+	wantSnapshot(t, reader, textSnapshot{})
 	const count = 32
-	observed := make(chan []textstate.Snapshot, 1)
+	observed := make(chan []textSnapshot, 1)
 	readErrors := make(chan error, 1)
 	go func() {
-		var snapshots []textstate.Snapshot
+		var snapshots []textSnapshot
 		for {
 			snapshot, err := readSnapshot(reader)
 			if err != nil {
@@ -148,7 +154,7 @@ func TestConcurrentPostsPublishInRevisionOrder(t *testing.T) {
 			}
 		}
 	}()
-	accepted := make(chan textstate.Snapshot, count)
+	accepted := make(chan textSnapshot, count)
 	var wg sync.WaitGroup
 	for i := range count {
 		wg.Go(func() {
@@ -163,7 +169,7 @@ func TestConcurrentPostsPublishInRevisionOrder(t *testing.T) {
 	}
 	wg.Wait()
 	close(accepted)
-	byRevision := make(map[uint64]textstate.Snapshot)
+	byRevision := make(map[uint64]textSnapshot)
 	for snapshot := range accepted {
 		if _, duplicate := byRevision[snapshot.Revision]; duplicate {
 			t.Fatalf("duplicate revision %d", snapshot.Revision)
@@ -199,7 +205,7 @@ func TestAtomicSubscriptionAndBoundedQueue(t *testing.T) {
 		}()
 		initial, updates := handler.subscribe()
 		<-done
-		var snapshot textstate.Snapshot
+		var snapshot textSnapshot
 		if err := json.Unmarshal(initial, &snapshot); err != nil {
 			t.Fatal(err)
 		}
@@ -211,7 +217,7 @@ func TestAtomicSubscriptionAndBoundedQueue(t *testing.T) {
 				t.Fatal("write fell into a gap between initial state and subscription")
 			}
 		}
-		if snapshot != (textstate.Snapshot{Text: "racing write", Revision: 1}) {
+		if snapshot != (textSnapshot{Text: "racing write", Revision: 1}) {
 			t.Fatalf("snapshot = %+v", snapshot)
 		}
 		for range 100 {
@@ -225,7 +231,7 @@ func TestAtomicSubscriptionAndBoundedQueue(t *testing.T) {
 		if err := json.Unmarshal(<-updates, &snapshot); err != nil {
 			t.Fatal(err)
 		}
-		if snapshot != (textstate.Snapshot{Text: "latest", Revision: 101}) {
+		if snapshot != (textSnapshot{Text: "latest", Revision: 101}) {
 			t.Fatalf("coalesced snapshot = %+v", snapshot)
 		}
 		handler.unsubscribe(updates)
@@ -263,7 +269,7 @@ func TestHTTPTextLimitsAndRejections(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.StatusCode, tt.status)
 			}
 			if tt.status == http.StatusOK {
-				var got textstate.Snapshot
+				var got textSnapshot
 				if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
 					t.Fatal(err)
 				}
@@ -272,7 +278,7 @@ func TestHTTPTextLimitsAndRejections(t *testing.T) {
 				}
 				<-updates
 			} else {
-				if handler.state.Current() != before || len(updates) != 0 {
+				if handler.state.Current().Revision != before.Revision || len(updates) != 0 {
 					t.Fatal("rejected write changed state or broadcast an update")
 				}
 			}
@@ -326,7 +332,7 @@ func TestBlockedWriteDoesNotBlockOtherClientsAndCleansUp(t *testing.T) {
 	handler.writeTimeout = 100 * time.Millisecond
 	server, client := testServer(t, handler)
 	response, reader := openStream(t, client, server.URL)
-	wantSnapshot(t, reader, textstate.Snapshot{})
+	wantSnapshot(t, reader, textSnapshot{})
 	writer := &stalledWriter{header: make(http.Header), started: make(chan struct{})}
 	done := make(chan struct{})
 	go func() {
@@ -359,7 +365,7 @@ func TestIdleStreamSurvivesWriteTimeoutAndHeartbeats(t *testing.T) {
 	handler.heartbeat = 40 * time.Millisecond
 	server, client := testServer(t, handler)
 	_, reader := openStream(t, client, server.URL)
-	wantSnapshot(t, reader, textstate.Snapshot{})
+	wantSnapshot(t, reader, textSnapshot{})
 	// The empty line terminates the initial snapshot, then a heartbeat arrives
 	// after the earlier write deadline would have expired.
 	if line, err := reader.ReadString('\n'); err != nil || line != "\n" {
@@ -396,7 +402,7 @@ func TestRoutingAndBodyReadFailure(t *testing.T) {
 	request.Body = io.NopCloser(failingReader{})
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest || handler.state.Current() != (textstate.Snapshot{}) {
+	if response.Code != http.StatusBadRequest || handler.state.Current().Revision != 0 {
 		t.Fatal("body read failure was not rejected without changing state")
 	}
 }
