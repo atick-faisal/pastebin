@@ -17,10 +17,15 @@ Run `just` with no arguments to see every recipe. The ones you will need most:
 | `just vet` | Check Go packages for suspicious code. |
 | `just test` | Run tests with data race detection. |
 | `just browser-check` | Drive two browsers against a local server. Run it after browser changes. |
+| `just docker-build` | Build the Docker image. Run it after changing the `Dockerfile` or the build. |
+| `just docker-run` | Build and run the image on port 8080 under the production memory limit. |
 
 `just browser-check` needs Node and Playwright, so it is not part of
 `just verify`. Set `PASTEBIN_PLAYWRIGHT_MODULE` to use an existing Playwright
 install.
+
+`just docker-build` and `just docker-run` need Docker, so they are not part of
+`just verify` either.
 
 ## Planning
 
