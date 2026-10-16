@@ -28,7 +28,9 @@ with immediate synchronization and minimal interface overhead.
 - CRDT, operational transformation, or Google Docs-style collaborative merging.
 - Authentication, accounts, or private access.
 - Analytics or observability features.
-- UI/UX work beyond functional text boxes and copy/add/remove controls.
+- UI/UX work beyond a minimal terminal-style interface: One Dark colours,
+  keyboard shortcuts, and line and byte counts around the text boxes and
+  copy/add/remove controls.
 - Persistence across process restarts or redeploys.
 
 ## Constraints
