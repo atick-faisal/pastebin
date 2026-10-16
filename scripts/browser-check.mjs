@@ -90,6 +90,21 @@ async function boxStatus(page, index, text) {
   [index, text]);
 }
 
+// The page's count text for a box's text: editor-style lines, then UTF-8 bytes.
+function countText(text) {
+  const lines = text === "" ? 0 : text.split("\n").length;
+  const bytes = Buffer.byteLength(text);
+  const unit = (count, word) => `${count.toLocaleString("en-US")} ${word}${count === 1 ? "" : "s"}`;
+  return `${unit(lines, "line")} · ${unit(bytes, "byte")}`;
+}
+
+// Counts are debounced, so wait for them instead of reading once.
+async function counted(page, index, expected) {
+  await page.waitForFunction(([index, expected]) =>
+    document.querySelectorAll("#boxes .box")[index].querySelector(".counts").textContent === expected,
+  [index, expected]);
+}
+
 async function writes(page) {
   return page.evaluate(() => window.writeBodies.slice());
 }
@@ -139,6 +154,14 @@ try {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await context.addInitScript(() => {
       window.writeBodies = [];
+      // The page encodes a box's text once per count scan, so this counts scans.
+      window.scans = 0;
+      const nativeEncode = TextEncoder.prototype.encode;
+      TextEncoder.prototype.encode = function (...args) {
+        window.scans++;
+        window.scanStart = performance.now();
+        return nativeEncode.apply(this, args);
+      };
       const nativeFetch = window.fetch;
       window.fetch = (...args) => {
         if (args[1]?.method === "PUT") window.writeBodies.push(args[1].body);
@@ -158,6 +181,7 @@ try {
   await Promise.all([a.goto("http://127.0.0.1:18084"), b.goto(url)]);
   await Promise.all([saved(a, [""]), saved(b, [""])]);
   assert.equal(await button(a, 0, "remove").isDisabled(), true, "the last box cannot be removed");
+  await Promise.all([a, b].map((page) => counted(page, 0, countText(""))));
 
   const pasted = "Pasted text\n🙂 العربية\n</textarea><script>throw Error('unsafe')</script>";
   await paste(a, 0, pasted);
@@ -177,6 +201,31 @@ try {
   const other = "Edited from browser B!";
   await Promise.all([saved(a, [pasted, other]), saved(b, [pasted, other])]);
   console.log("PASS: an added box appears in both browsers; pastes and edits synchronize per box");
+
+  // The pasted and edited texts include emoji and Arabic, so bytes differ from characters.
+  for (const page of [a, b]) {
+    await counted(page, 0, countText(pasted));
+    await counted(page, 1, countText(other));
+  }
+  const trailing = "one\ntwo\n";
+  await textarea(b, 1).fill(trailing);
+  await Promise.all([a, b].map((page) => counted(page, 1, countText(trailing))));
+  assert.equal(await boxes(a).nth(1).locator(".counts").textContent(), "3 lines · 8 bytes");
+  await textarea(b, 1).fill(other);
+  await Promise.all([saved(a, [pasted, other]), saved(b, [pasted, other])]);
+  await Promise.all([a, b].map((page) => counted(page, 1, countText(other))));
+
+  // A burst of typing must trigger a few scans, not one per keystroke.
+  await textarea(a, 1).focus();
+  await a.keyboard.press("End");
+  await a.evaluate(() => { window.scans = 0; });
+  await a.keyboard.type("x".repeat(30));
+  const typed = other + "x".repeat(30);
+  await Promise.all([a, b].map((page) => counted(page, 1, countText(typed))));
+  assert.ok(await a.evaluate(() => window.scans) <= 5, "typing must not rescan the box per keystroke");
+  await textarea(a, 1).fill(other);
+  await Promise.all([saved(a, [pasted, other]), saved(b, [pasted, other])]);
+  console.log("PASS: line and byte counts follow typing, pastes and remote text in both browsers, with debounced scans");
 
   assert.equal(await copy(b, 0), pasted);
   assert.equal(await copy(a, 1), other);
@@ -240,6 +289,33 @@ try {
   await textarea(a, 0).fill("retry after failure");
   await Promise.all([saved(a, ["retry after failure", second]), saved(b, ["retry after failure", second])]);
 
+  // A box at the 10 MiB limit with 100,000 lines: counts must appear promptly, in both browsers.
+  const limitCounts = "100,000 lines · 10,485,760 bytes";
+  const timing = await a.evaluate(() => new Promise((resolve) => {
+    const text = document.querySelector("#boxes textarea");
+    const lines = Array(100000).fill("x".repeat(100)).join("\n");
+    text.value = lines + "x".repeat(10 * 1024 * 1024 - lines.length);
+    const counts = document.querySelector("#boxes .counts");
+    const start = performance.now();
+    new MutationObserver((_, observer) => {
+      observer.disconnect();
+      const end = performance.now();
+      // The counts update right after the scan, so this spans the whole scan. The input
+      // event also starts a 10 MiB upload on the same thread, which delays the debounce timer.
+      resolve({ latency: end - start, scan: end - window.scanStart });
+    }).observe(counts, { childList: true });
+    text.dispatchEvent(new Event("input", { bubbles: true }));
+  }));
+  console.log(`INFO: a 10 MiB, 100,000-line box: scan ${Math.round(timing.scan)} ms, counts shown ${Math.round(timing.latency)} ms after input`);
+  assert.ok(timing.scan < 100, "one count scan of a 10 MiB box must stay under 100 ms");
+  await Promise.all([a, b].map((page) => page.waitForFunction((expected) => {
+    const box = document.querySelector("#boxes .box");
+    return box.querySelector(".status").textContent === "Saved." &&
+      box.querySelector(".counts").textContent === expected;
+  }, limitCounts)));
+  await textarea(a, 0).fill("retry after failure");
+  await Promise.all([saved(a, ["retry after failure", second]), saved(b, ["retry after failure", second])]);
+
   await a.evaluate(() => {
     const text = document.querySelector("#boxes textarea");
     text.value = "🙂".repeat(10 * 1024 * 1024 / 4 + 1);
@@ -248,9 +324,11 @@ try {
   await boxStatus(a, 0, "10 MiB limit");
   await saved(b, ["retry after failure", second]);
   assert.equal(await textarea(a, 0).evaluate((text) => new Blob([text.value]).size), 10 * 1024 * 1024 + 4);
+  await counted(a, 0, "1 line · 10,485,764 bytes");
   const kept = "shortened after rejection";
   await textarea(a, 0).fill(kept);
   await Promise.all([saved(a, [kept, second]), saved(b, [kept, second])]);
+  await Promise.all([a, b].map((page) => counted(page, 0, countText(kept))));
   console.log("PASS: network failures and oversized UTF-8 writes show feedback, retain drafts, and recover");
 
   // Hold A's stream so its write reaches the server before A learns of the removal.
