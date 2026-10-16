@@ -374,6 +374,54 @@ try {
   }
   console.log("PASS: Add is disabled at the 10-box limit with a message; the server rejects one more");
 
+  // Shortcuts match the physical key, so they must work whatever character Alt produces.
+  const focused = (page, index) => textarea(page, index).evaluate((text) => text === document.activeElement);
+  await a.bringToFront();
+  for (const page of [a, b]) {
+    assert.match(await page.locator("#hints").textContent(), /Alt\+N.*Alt\+1-9.*Alt\+C.*Alt\+Backspace/);
+    assert.match(await page.locator("#add").getAttribute("title"), /Alt\+N/);
+    assert.match(await button(page, 0, "copy").getAttribute("title"), /Alt\+C/);
+    assert.match(await button(page, 0, "remove").getAttribute("title"), /Alt\+Backspace/);
+  }
+  await a.keyboard.press("Alt+KeyN");
+  await Promise.all([saved(a, [kept, ""]), saved(b, [kept, ""])]);
+  await a.keyboard.press("Alt+Digit2");
+  assert.equal(await focused(a, 1), true, "Alt+2 focuses the second box");
+  await a.keyboard.press("Alt+Digit1");
+  assert.equal(await focused(a, 0), true, "Alt+1 focuses the first box");
+  await a.keyboard.press("Alt+Digit9");
+  assert.equal(await focused(a, 0), true, "Alt+9 with two boxes does nothing");
+  await a.keyboard.press("Alt+Digit2");
+  const shortcutText = "typed after Alt+2";
+  await a.keyboard.type(shortcutText);
+  await Promise.all([saved(a, [kept, shortcutText]), saved(b, [kept, shortcutText])]);
+  await a.evaluate(() => navigator.clipboard.writeText(""));
+  await a.keyboard.press("Alt+KeyC");
+  await boxes(a).nth(1).locator(".copy-status").filter({ hasText: "Copied." }).waitFor();
+  assert.equal(await a.evaluate(() => navigator.clipboard.readText()), shortcutText);
+  assert.equal(await textarea(a, 1).inputValue(), shortcutText, "Alt+C must not type a character");
+
+  // A held key sends repeated keydowns; only the first may act.
+  await a.evaluate(() => {
+    for (const repeat of [false, true, true]) {
+      document.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyN", altKey: true, repeat }));
+    }
+  });
+  await Promise.all([saved(a, [kept, shortcutText, ""]), saved(b, [kept, shortcutText, ""])]);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(await boxes(a).count(), 3, "a repeated Alt+N must not add more boxes");
+  await a.keyboard.press("Alt+Digit3");
+  await a.keyboard.press("Alt+Backspace");
+  await Promise.all([saved(a, [kept, shortcutText]), saved(b, [kept, shortcutText])]);
+  await a.keyboard.press("Alt+Digit2");
+  await a.keyboard.press("Alt+Backspace");
+  await Promise.all([saved(a, [kept]), saved(b, [kept])]);
+  await a.keyboard.press("Alt+Digit1");
+  await a.keyboard.press("Alt+Backspace");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await Promise.all([saved(a, [kept]), saved(b, [kept])]);
+  console.log("PASS: Alt shortcuts add, focus, copy and remove boxes through the same code as the buttons");
+
   const reconnect = await holdReply(a);
   await textarea(a, 0).fill("accepted before disconnect");
   await reconnect.ready;
