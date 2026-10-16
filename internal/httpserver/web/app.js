@@ -114,19 +114,21 @@ function createBox(id) {
     box.pending = true;
     submit(box);
   });
-  section.querySelector(".copy").addEventListener("click", async () => {
-    try {
-      // navigator.clipboard is undefined outside secure contexts (plain HTTP on a LAN),
-      // so that case throws here too and shares the failure message.
-      await navigator.clipboard.writeText(box.textarea.value);
-      box.copyStatus.textContent = "Copied.";
-    } catch {
-      box.copyStatus.textContent = "Could not copy. Select the text and copy it manually.";
-    }
-  });
+  section.querySelector(".copy").addEventListener("click", () => copyBox(box));
   box.remove.addEventListener("click", () => removeBox(box));
   updateCounts(box);
   return box;
+}
+
+async function copyBox(box) {
+  try {
+    // navigator.clipboard is undefined outside secure contexts (plain HTTP on a LAN),
+    // so that case throws here too and shares the failure message.
+    await navigator.clipboard.writeText(box.textarea.value);
+    box.copyStatus.textContent = "Copied.";
+  } catch {
+    box.copyStatus.textContent = "Could not copy. Select the text and copy it manually.";
+  }
 }
 
 function drop(box) {
@@ -272,7 +274,7 @@ async function removeBox(box) {
   }
 }
 
-add.addEventListener("click", async () => {
+async function addBox() {
   const requestGeneration = generation;
   try {
     const failed = await change("/boxes", "POST");
@@ -281,6 +283,44 @@ add.addEventListener("click", async () => {
   } catch {
     if (requestGeneration === generation) showNotice("Could not confirm the new box. Try again.");
   }
+}
+
+add.addEventListener("click", addBox);
+
+// The box that holds keyboard focus, whether on its textarea or one of its buttons.
+function focusedBox() {
+  const section = document.activeElement?.closest(".box");
+  return [...boxes.values()].find((box) => box.section === section);
+}
+
+// Each shortcut reuses its button's code and respects the button's disabled state,
+// so a shortcut works exactly when the button would.
+const shortcuts = {
+  KeyN: () => { if (!add.disabled) addBox(); },
+  KeyC: () => {
+    const box = focusedBox();
+    if (box) copyBox(box);
+  },
+  Backspace: () => {
+    const box = focusedBox();
+    if (box && !box.remove.disabled) removeBox(box);
+  },
+};
+
+// Matches event.code, not event.key: Alt changes the typed character on macOS
+// (Alt+N is a dead key, Alt+C types "ç"), but the physical key stays the same.
+document.addEventListener("keydown", (event) => {
+  // Ctrl+Alt is how Windows types AltGr characters, so leave every extra modifier alone.
+  // Ignoring key repeat stops a held key from adding or removing boxes in bulk.
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  const digit = /^Digit([1-9])$/.exec(event.code);
+  const run = digit
+    ? () => [...boxes.values()][Number(digit[1]) - 1]?.textarea.focus()
+    : shortcuts[event.code];
+  if (!run) return;
+  // Stop the browser typing the Alt character into the focused textarea.
+  event.preventDefault();
+  if (!event.repeat) run();
 });
 
 events.onmessage = (event) => {

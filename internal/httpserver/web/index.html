@@ -29,7 +29,7 @@
     p { margin: 0.25rem 0; }
     /* Status text is often empty; collapse it so it leaves no gap. */
     p:empty, span:empty { display: none; }
-    #status, .status, .copy-status, #add-status { color: var(--muted); }
+    #hints, #status, .status, .copy-status, #add-status { color: var(--muted); }
     #boxes { margin: 1rem 0; }
     .box {
       display: flex;
@@ -83,16 +83,17 @@
 <body>
   <h1>Pastebin</h1>
   <p>Shared publicly. Changes replace the text for everyone. Maximum size: 10 MiB per box.</p>
+  <p id="hints">Alt+N add · Alt+1-9 focus · Alt+C copy · Alt+Backspace remove</p>
   <p id="status" role="status" aria-live="polite">Connecting…</p>
   <p id="notice" role="status" aria-live="polite"></p>
   <div id="boxes"></div>
-  <button id="add" type="button" disabled>Add box</button>
+  <button id="add" type="button" title="Add box (Alt+N)" disabled>Add box</button>
   <span id="add-status" role="status" aria-live="polite"></span>
   <template id="box-template">
     <section class="box">
       <label></label>
-      <button class="copy" type="button">Copy</button>
-      <button class="remove" type="button">Remove</button>
+      <button class="copy" type="button" title="Copy this box (Alt+C)">Copy</button>
+      <button class="remove" type="button" title="Remove this box (Alt+Backspace)">Remove</button>
       <span class="copy-status" role="status" aria-live="polite"></span>
       <p class="status" role="status" aria-live="polite"></p>
       <span class="counts"></span>
