@@ -3,6 +3,8 @@
 // Mirrors textstate.MaxBoxes on the server.
 const MAX_BOXES = 10;
 const LIMIT_MESSAGE = `Box limit of ${MAX_BOXES} reached. Remove a box to add another.`;
+// Counts are recomputed once typing pauses, so a 10 MiB box is not rescanned per keystroke.
+const COUNT_DELAY_MS = 150;
 const REMOVED_MESSAGE = "A box you were editing was removed by someone else. Its unsaved text was lost.";
 
 const status = document.getElementById("status");
@@ -34,11 +36,38 @@ function live(box, requestGeneration) {
   return requestGeneration === generation && boxes.get(box.id) === box;
 }
 
+// countLines counts lines the way an editor does: an empty box has none, and
+// a trailing newline starts another line. It avoids split() so a box with
+// 100,000 lines does not allocate 100,000 strings.
+function countLines(text) {
+  if (text === "") return 0;
+  let lines = 1;
+  for (let at = text.indexOf("\n"); at !== -1; at = text.indexOf("\n", at + 1)) lines++;
+  return lines;
+}
+
+function plural(count, word) {
+  return `${count.toLocaleString("en-US")} ${word}${count === 1 ? "" : "s"}`;
+}
+
+// updateCounts shows lines and UTF-8 bytes, the unit of the server's 10 MiB limit.
+function updateCounts(box) {
+  const text = box.textarea.value;
+  const bytes = new TextEncoder().encode(text).length;
+  box.counts.textContent = `${plural(countLines(text), "line")} · ${plural(bytes, "byte")}`;
+}
+
+function scheduleCounts(box) {
+  clearTimeout(box.countTimer);
+  box.countTimer = setTimeout(() => updateCounts(box), COUNT_DELAY_MS);
+}
+
 function render(box) {
   // Keep typing and rejected drafts visible. Assigning value does not fire input,
   // and skipping equal values also preserves the caret on a sender's echo.
   if (!box.writing && !box.pending && !box.failure && box.textarea.value !== box.text) {
     box.textarea.value = box.text;
+    scheduleCounts(box);
   }
   box.status.textContent = box.failure || (box.writing || box.pending ? "Saving…" : "Saved.");
 }
@@ -61,6 +90,8 @@ function createBox(id) {
     section,
     textarea: section.querySelector("textarea"),
     status: section.querySelector(".status"),
+    counts: section.querySelector(".counts"),
+    countTimer: 0,
     copyStatus: section.querySelector(".copy-status"),
     remove: section.querySelector(".remove"),
     text: "",
@@ -78,6 +109,7 @@ function createBox(id) {
   box.remove.setAttribute("aria-label", `Remove box ${id}`);
 
   box.textarea.addEventListener("input", () => {
+    scheduleCounts(box);
     // A single flag coalesces intermediate input into the latest visible draft.
     box.pending = true;
     submit(box);
@@ -93,6 +125,7 @@ function createBox(id) {
     }
   });
   box.remove.addEventListener("click", () => removeBox(box));
+  updateCounts(box);
   return box;
 }
 
@@ -102,6 +135,7 @@ function drop(box) {
     showNotice(REMOVED_MESSAGE);
   }
   if (box.writing) box.writing.abort();
+  clearTimeout(box.countTimer);
   boxes.delete(box.id);
   box.section.remove();
 }
@@ -138,7 +172,10 @@ function applySnapshot(snapshot) {
     // The first snapshot of a connection is a new baseline, even at revision
     // zero after a server restart, so nothing from before it is kept.
     connected = true;
-    for (const box of boxes.values()) box.section.remove();
+    for (const box of boxes.values()) {
+      clearTimeout(box.countTimer);
+      box.section.remove();
+    }
     boxes = new Map();
     gone = new Set();
     listRevision = -1;
