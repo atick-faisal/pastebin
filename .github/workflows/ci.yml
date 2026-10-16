@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # go.mod is the single source of truth for the Go version.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: extractions/setup-just@v4
+      # Same entrypoints as local work (AGENTS.md), so CI cannot drift from them.
+      - run: just verify
+      # Catches a broken Dockerfile before Dokploy tries to deploy it.
+      # browser-check stays out: it needs Node and Playwright.
+      - run: just docker-build
