@@ -118,6 +118,12 @@ The repo is public, as `atick-faisal/pastebin` (confirmed 2026-10-16).
 - [ ] A 256 MiB limit, like the host's smaller compose services — leaves more room for other apps, but snapshot copies at the worst case could push it over, and an out-of-memory kill wipes everyone's text.
 - [ ] No limit, like the existing single-container app — nothing to tune, but the host has no swap, so a worst-case spike could make the kernel kill other services on the VPS (`docs/goal.md:36-37`).
 
+Checked on 2026-10-16 (DOCKER-DEPLOY-02): with `--memory=384m`, five SSE
+subscribers and 10 boxes of 10 MiB each, overwritten for 8 rounds, the peak was
+about 342 MiB (sampled with `docker stats`, so a very short spike could be a
+little higher). The container was never OOM-killed and every subscriber
+converged. That leaves about 42 MiB of headroom, so the limit holds.
+
 ### Q6: What checks keep the image building?
 
 - [x] GitHub Actions that runs `just verify` and `docker build` on every push; `browser-check` stays out (recommended) — a broken Dockerfile is caught before Dokploy tries to deploy it; this needs Q1 to be GitHub.
