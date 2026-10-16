@@ -2,6 +2,8 @@
 
 const text = document.getElementById("text");
 const status = document.getElementById("status");
+const copy = document.getElementById("copy");
+const copyStatus = document.getElementById("copy-status");
 const events = new EventSource("/events");
 let generation = 0;
 let latest = null;
@@ -74,6 +76,17 @@ text.addEventListener("input", () => {
   // A single flag coalesces intermediate input into the latest visible draft.
   pending = true;
   submit();
+});
+
+copy.addEventListener("click", async () => {
+  try {
+    // navigator.clipboard is undefined outside secure contexts (plain HTTP on a LAN),
+    // so that case throws here too and shares the failure message.
+    await navigator.clipboard.writeText(text.value);
+    copyStatus.textContent = "Copied.";
+  } catch {
+    copyStatus.textContent = "Could not copy. Select the text and copy it manually.";
+  }
 });
 
 events.onmessage = (event) => {
