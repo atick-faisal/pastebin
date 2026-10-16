@@ -1,7 +1,7 @@
 ---
 slug: multi-box-sync
 title: Multi-Box Sync
-status: in-progress
+status: shipped
 created: 2026-10-16
 ---
 
