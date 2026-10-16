@@ -22,6 +22,45 @@ Live at <https://pastebin.atick.dev>.
 Go backend, plain HTML with a little JavaScript, and Server-Sent Events for
 live updates. No database.
 
+## How it works
+
+The server keeps every box in memory and is the single source of truth. Each
+browser opens one live stream (`/events`) and receives the current state on
+connect. When you type, the browser sends the new text to the server, which
+replaces the box and pushes the result to every connected browser.
+
+Here is what happens when a browser connects, when you type, and when you add
+or remove a box:
+
+```mermaid
+sequenceDiagram
+    participant A as Browser A
+    participant S as Server
+    participant B as Browser B
+
+    A->>S: open /events
+    S-->>A: snapshot of all boxes and text
+    B->>S: open /events
+    S-->>B: snapshot of all boxes and text
+
+    Note over A,B: A types in a box
+    A->>S: PUT /boxes/id with the new text
+    S->>S: replace the box text and bump the revision
+    S-->>A: reply with the saved box
+    S-->>A: text event
+    S-->>B: text event
+    B->>B: show the new text
+
+    Note over A,B: A adds or removes a box
+    A->>S: POST /boxes or DELETE /boxes/id
+    S-->>A: reply with the box list
+    S-->>A: boxes event
+    S-->>B: boxes event
+```
+
+If a browser loses its connection, it reconnects and receives a fresh snapshot.
+The server's state wins, so edits that were never sent are discarded.
+
 ## Run it
 
 You need [Go](https://go.dev/dl/) (the version in `go.mod`).
